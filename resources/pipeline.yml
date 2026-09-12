@@ -1,0 +1,18 @@
+resources:
+  pipelines:
+    telematics_pipeline:
+      name: ${var.pipeline_name}
+      catalog: ${var.catalog}
+      schema: ${resources.schemas.target_schema.name}
+      serverless: true
+      continuous: false
+      root_path: ../src/pipeline
+      libraries:
+        - glob:
+            include: ../src/pipeline/**
+      configuration:
+        telematics.catalog: ${var.catalog}
+        telematics.schema: ${var.schema}
+        telematics.landing_path: /Volumes/${var.catalog}/${var.schema}/${var.landing_volume}/pings
+        telematics.schema_location: /Volumes/${var.catalog}/${var.schema}/${var.landing_volume}/_schemas/bronze_pings
+        telematics.watermark: ${var.watermark}

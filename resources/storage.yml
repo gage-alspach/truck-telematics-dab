@@ -1,0 +1,14 @@
+resources:
+  schemas:
+    target_schema:
+      name: ${var.schema}
+      catalog_name: ${var.catalog}
+      comment: "Truck telematics ${bundle.target} schema managed by Declarative Automation Bundles."
+
+  volumes:
+    landing:
+      name: ${var.landing_volume}
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.target_schema.name}
+      volume_type: MANAGED
+      comment: "Landing volume for synthetic GPS ping files and Auto Loader schema metadata."

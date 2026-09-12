@@ -1,0 +1,112 @@
+resources:
+  jobs:
+    telematics_orchestrator:
+      name: ${var.job_name}
+      max_concurrent_runs: 1
+
+      parameters:
+        - name: commit_sha
+          default: local
+        - name: drift_mode
+          default: none
+        - name: batches
+          default: ${var.generator_batches}
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: '4'
+
+      tasks:
+        - task_key: pre_migrations
+          spark_python_task:
+            python_file: ../src/jobs/migration_runner.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --target
+              - ${bundle.target}
+              - --phase
+              - pre
+              - --commit-sha
+              - '{{job.parameters.commit_sha}}'
+          environment_key: default
+
+        - task_key: seed_reference
+          depends_on:
+            - task_key: pre_migrations
+          spark_python_task:
+            python_file: ../src/jobs/seed_reference.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+          environment_key: default
+
+        - task_key: generate_pings
+          depends_on:
+            - task_key: seed_reference
+          spark_python_task:
+            python_file: ../src/jobs/generate_pings.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --volume
+              - ${var.landing_volume}
+              - --batches
+              - '{{job.parameters.batches}}'
+              - --sleep-seconds
+              - ${var.generator_sleep_seconds}
+              - --drift-mode
+              - '{{job.parameters.drift_mode}}'
+          environment_key: default
+
+        - task_key: refresh_pipeline
+          depends_on:
+            - task_key: generate_pings
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.telematics_pipeline.id}
+          # Auto Loader addNewColumns updates schema metadata and can require a retry.
+          max_retries: 2
+          min_retry_interval_millis: 10000
+
+        - task_key: post_migrations
+          depends_on:
+            - task_key: refresh_pipeline
+          spark_python_task:
+            python_file: ../src/jobs/migration_runner.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --target
+              - ${bundle.target}
+              - --phase
+              - post
+              - --commit-sha
+              - '{{job.parameters.commit_sha}}'
+          environment_key: default
+
+        - task_key: quality_report
+          depends_on:
+            - task_key: post_migrations
+          spark_python_task:
+            python_file: ../src/jobs/quality_report.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --lookback-minutes
+              - '60'
+              - --rescued-warn-rate
+              - ${var.rescued_data_warn_rate}
+              - --null-warn-rate
+              - ${var.null_warn_rate}
+          environment_key: default

@@ -1,0 +1,81 @@
+bundle:
+  name: truck_telematics
+  engine: direct
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Existing Unity Catalog catalog shared by all targets.
+    default: telematics
+  schema:
+    description: Target schema for the current bundle target.
+    default: dev
+  landing_volume:
+    description: Managed volume that contains landing files and Auto Loader schema metadata.
+    default: landing
+  pipeline_name:
+    description: Deployed Lakeflow pipeline name.
+    default: telematics-dev-pipeline
+  job_name:
+    description: Deployed orchestration job name.
+    default: telematics-dev-orchestrator
+  watermark:
+    description: Event-time lateness assumption used for streaming deduplication.
+    default: 10 minutes
+  generator_batches:
+    description: Default number of synthetic file batches per orchestrated run.
+    default: 5
+  generator_sleep_seconds:
+    description: Delay between generated files; kept short for the take-home demo.
+    default: 0.2
+  rescued_data_warn_rate:
+    description: Warning threshold for recent Bronze rows containing rescued data.
+    default: 0.05
+  null_warn_rate:
+    description: Warning threshold for recent Bronze null rates in expected source fields.
+    default: 0.20
+
+workspace:
+  root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+
+targets:
+  dev:
+    default: true
+    variables:
+      schema: dev
+      pipeline_name: telematics-dev-pipeline
+      job_name: telematics-dev-orchestrator
+      generator_batches: 5
+
+  test:
+    variables:
+      schema: test
+      pipeline_name: telematics-test-pipeline
+      job_name: telematics-test-orchestrator
+      generator_batches: 8
+    resources:
+      jobs:
+        telematics_orchestrator:
+          schedule:
+            quartz_cron_expression: "0 0 * * * ?"
+            timezone_id: UTC
+            # Deliberately paused so a Free Edition deploy does not burn quota.
+            # Change to UNPAUSED when you want the hourly schedule active.
+            pause_status: PAUSED
+
+  prod:
+    variables:
+      schema: prod
+      pipeline_name: telematics-prod-pipeline
+      job_name: telematics-prod-orchestrator
+      generator_batches: 10
+    resources:
+      jobs:
+        telematics_orchestrator:
+          schedule:
+            quartz_cron_expression: "0 0/15 * * * ?"
+            timezone_id: UTC
+            # The 15-minute production cadence is encoded but paused for the demo.
+            pause_status: PAUSED
