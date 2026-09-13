@@ -38,43 +38,77 @@ manually manipulating checkpoints.
 
 ## Static reference and Gold
 
-`truck_details` is a small managed Delta reference table created and seeded by pre-migrations.
-The seed contains 20 explicit records matching the original fixed-seed generator and uses an insert-only
-`MERGE`: existing truck attributes are preserved, including on retries. The scheduled job does not reseed it. `gold_pings_enriched` performs the required **stream-static join** between streaming Silver pings and
-the static dimension; the tiny dimension is explicitly broadcast. This event-level table reflects the static
-snapshot used while each ping is processed.
+`truck_details` is a small managed Delta reference table created and seeded by migrations. The seed contains 20
+explicit records matching the fixed generator IDs and uses an insert-only `MERGE`, so existing truck attributes
+are preserved on retries. The scheduled ingestion job does not reseed it.
+
+`gold_pings_enriched` performs the required **stream-static join** between streaming Silver pings and the static
+dimension; the tiny dimension is explicitly broadcast. This event-level table reflects the static snapshot used
+while each ping is processed.
 
 `gold_truck_current` is a materialized view that selects the latest valid Silver ping per truck and joins the
 current `truck_details` snapshot again. This gives the business-facing current-position result and means a
 reference-data correction is reflected on the next refresh even if a truck has not emitted a new ping.
 
-## Schema migrations as code
+## SQL migrations as code
 
-Migrations run in a separate unscheduled `pre_migrations` job, not in the scheduled orchestrator.
-Bootstrap deploys resources first so the migration job exists. Later releases sync files, run
-pre-migrations, and then deploy. Keep scheduled work paused and serialize releases while doing this
-because sync changes deployed application files too.
+Migrations are separate unscheduled release jobs rather than tasks in the recurring ingestion workflow. The
+runner supports two phases:
 
-This take-home implements only the pre phase to reduce Databricks Free Edition compute use.
-Pre-migrations are intended for expansion changes, such as adding columns or tables before the new
-application version starts using them. A production release process would commonly add a post phase
-for contraction changes, such as dropping obsolete columns or tables after deployment proves the new
-version no longer depends on them. Contractions should be reviewed for rollback and data-retention risk.
+- **pre** - backward-compatible structure required before the new pipeline version is deployed
+- **post** - SQL backfill or contraction work that should occur only after deployment succeeds
 
-Intentional table changes use timestamp-named SQL migrations in `src/migrations/pre`. Sequential
-integers are avoided so several engineers can create changes concurrently without coordinating the next
-number. Each target maintains its own `<catalog>.<schema>._schema_migrations` table containing migration ID,
-checksum, phase, applied time, bundle target, and commit SHA.
+A normal existing-environment release is therefore:
 
-The migration runner loads applied IDs once, executes pending files in deterministic filename order, records a
-migration only after success, and fails if the checksum of an already-applied migration changes. Applied files
-remain in Git forever. One top-level SQL statement is allowed per file; multi-step logic can use a
-`BEGIN ... END` block. The included `active_flag` migration checks `information_schema.columns` before issuing
-`ALTER TABLE`, so rerunning the migration logic is safe and non-destructive.
+```text
+validate -> sync migration files -> pre migrations -> deploy -> post migrations -> pipeline run/refresh
+```
+
+A new environment first deploys the bundle so the migration jobs exist, then replays the retained SQL migration
+chain before its first pipeline execution. This makes the repository capable of reconstructing the current
+managed reference/schema state from an empty target without manual SQL edits.
+
+Migration files remain **SQL-only** under `src/migrations/pre` and `src/migrations/post`. Each target maintains
+its own `<catalog>.<schema>._migrations` Delta table containing migration ID, checksum, phase, applied time,
+bundle target, and commit SHA.
+
+The runner loads applied IDs once, executes pending files in deterministic filename order, records a migration
+only after success, and fails if the checksum of an already-applied migration changes. Applied files remain in
+Git forever. One top-level SQL statement is allowed per file; multi-step logic can use a `BEGIN ... END` block.
+The included `active_flag` migration checks `information_schema.columns` before issuing `ALTER TABLE`, and seed
+or backfill work uses idempotent `MERGE` patterns where appropriate.
 
 Rollback is **forward-fix by default**: applied migrations are immutable. A destructive reverse operation is a
-new reviewed migration, and data-impacting rollback would be based on Delta history/restore only when the
-business and retention requirements justify it.
+new reviewed migration, and data-impacting rollback would use Delta history/restore only when retention and
+business requirements make that safe.
+
+## Migration demonstration
+
+This branch adds a real schema-evolution release:
+
+1. Pre migration `20260913_00_add_truck_class.sql` adds a nullable `truck_class` column.
+2. The new pipeline definition exposes `truck_class` in both Gold outputs.
+3. Post migration `20260913_01_backfill_truck_class.sql` populates the new attribute from `capacity_lbs`.
+4. If existing historical Gold rows need the new reference attribute, perform an explicit full refresh after the post migration.
+
+The migration chain itself remains replayable from scratch. On a newly recreated environment, all SQL migrations
+run before the first pipeline execution, so the current pipeline builds Gold with `truck_class` immediately and
+no transition-only full refresh is required.
+
+## Pipeline refresh and rebuilds
+
+Full refresh is deliberately **not modeled as a migration**. SQL migrations represent durable structural or
+reference-data state; a Lakeflow full refresh is an operational transition that recomputes derived state.
+
+When a deployed pipeline schema/logic change requires historical Gold rows to be recalculated, an explicit full
+or selective refresh is acceptable. That step can be performed with the bundle CLI, while Bronze/Silver remain
+the replay source.
+
+The tradeoff is intentional: some operational recovery actions remain manual, but the durable environment state
+is reproducible. In a worst-case rebuild, the bundle recreates managed resources, the retained migration chain
+reconstructs the current schema/reference state, and the current declarative pipeline definition rebuilds derived
+state from retained source data or newly generated demo input. A freshly recreated target therefore does not need
+a transition-only full refresh; its first normal pipeline run builds the derived tables from the current code.
 
 ## Scale
 
@@ -82,13 +116,4 @@ No partitioning is added for the tiny demo. At hundreds of thousands of trucks, 
 shape remains viable; the team would tune cadence and watermark from observed latency, use clustering where
 query patterns justify it, monitor streaming state/backlog, and revisit the broadcast strategy if the truck
 dimension becomes large. The key principle is stable: **Bronze preserves recoverability, Silver enforces the
-trusted contract, Gold serves business semantics, and production schema changes are promoted as code.**
-
-## Future Azure DevOps deployment enhancements
-
-These are planned ADO release/PR checks, not implemented by the current bundle or GitHub workflow.
-
-- Before deployment, check whether the target's pre_migrations job exists using deployment metadata or a known job ID. If present, publish the current migration files and run it; fail the release if it fails. If confirmed missing, log the bootstrap condition and skip the pre-deployment invocation. Authentication, permission, and service errors must fail the check rather than be treated as a missing job.
-- Preserve first-deployment prerequisites: this project's pre-migrations create and seed truck_details. If the pre-deployment invocation was skipped, run pre_migrations after deployment and before the first orchestrator run. A future independently provisioned migration framework can remove this bootstrap dependency.
-- Add a post-migration phase if the release process begins performing contraction changes. Run it after deployment and gate destructive changes on compatibility, rollback, and retention checks.
-- Add PR validation against the proposed merged tree to reject duplicate migration IDs (filename stems). Exact duplicate filenames cannot coexist in a Git directory, so also reject duplicate timestamp prefixes with different descriptions to catch concurrent authors choosing the same identifier. Report the conflicting paths and require renaming unapplied migrations before merge. Keep the existing runtime content-checksum protection; filename uniqueness serves a different purpose.
+trusted contract, Gold serves business semantics, and production schema/reference changes are promoted as code.**
