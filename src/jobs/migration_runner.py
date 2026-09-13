@@ -39,10 +39,9 @@ def main():
     phase = args.phase
 
     spark = SparkSession.builder.getOrCreate()
-    migration_table = f"`{catalog}`.`{schema}`.`_schema_migrations`"
+    migration_table = f"`{catalog}`.`{schema}`.`_migrations`"
 
-    # Bootstrap state is itself version-controlled in this runner. Every target
-    # gets its own table because every target uses a different schema.
+    # Every target keeps independent apply-once migration history in its schema.
     spark.sql(
         f"""
         CREATE TABLE IF NOT EXISTS {migration_table} (
@@ -116,7 +115,7 @@ def main():
             )
         ]
         spark.createDataFrame(row, history_schema).write.mode("append").saveAsTable(
-            f"{catalog}.{schema}._schema_migrations"
+            f"{catalog}.{schema}._migrations"
         )
         print(f"DONE {migration_id}")
 
