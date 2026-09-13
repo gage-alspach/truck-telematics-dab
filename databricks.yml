@@ -30,13 +30,6 @@ variables:
   generator_sleep_seconds:
     description: Delay between generated files; kept short for the take-home demo.
     default: 0.2
-  rescued_data_warn_rate:
-    description: Warning threshold for recent Bronze rows containing rescued data.
-    default: 0.05
-  null_warn_rate:
-    description: Warning threshold for recent Bronze null rates in expected source fields.
-    default: 0.20
-
 workspace:
   root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
 

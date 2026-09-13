@@ -16,7 +16,7 @@ def parse_args():
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--schema", required=True)
     parser.add_argument("--target", required=True)
-    parser.add_argument("--phase", choices=("pre", "post"), required=True)
+    parser.add_argument("--migration-root", required=True)
     parser.add_argument("--commit-sha", default="local")
     return parser.parse_args()
 
@@ -55,16 +55,19 @@ def main():
         """
     )
 
-    migration_dir = Path(__file__).resolve().parents[1] / "migrations" / args.phase
+    phase = "pre"
+    migration_dir = Path(args.migration_root) / phase
+    if not migration_dir.is_dir():
+        raise FileNotFoundError(f"Migration directory does not exist: {migration_dir}")
     migration_files = sorted(migration_dir.glob("*.sql"))
 
     applied_rows = spark.sql(
-        f"SELECT migration_id, checksum FROM {migration_table} WHERE phase = '{args.phase}'"
+        f"SELECT migration_id, checksum FROM {migration_table} WHERE phase = '{phase}'"
     ).collect()
     applied = {row["migration_id"]: row["checksum"] for row in applied_rows}
 
     if not migration_files:
-        print(f"No {args.phase} migrations found. Nothing to do.")
+        print("No pre migrations found. Nothing to do.")
         return
 
     history_schema = StructType(
@@ -96,7 +99,7 @@ def main():
         if not rendered:
             raise RuntimeError(f"Migration {migration_id} is empty")
 
-        print(f"APPLY {migration_id} ({args.phase})")
+        print(f"APPLY {migration_id} ({phase})")
         # Convention: one top-level SQL statement per migration file. A migration
         # that needs multiple statements can use a Databricks BEGIN ... END block.
         spark.sql(rendered)
@@ -105,7 +108,7 @@ def main():
             (
                 migration_id,
                 checksum,
-                args.phase,
+                phase,
                 datetime.now(timezone.utc),
                 args.target,
                 args.commit_sha,

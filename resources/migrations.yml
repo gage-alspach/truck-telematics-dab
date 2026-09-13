@@ -1,0 +1,31 @@
+resources:
+  jobs:
+    pre_migrations:
+      name: telematics-${bundle.target}-pre-migrations
+      max_concurrent_runs: 1
+      parameters:
+        - name: commit_sha
+          default: local
+      # Serverless job compute: Python tasks use an environment_key and this job
+      # intentionally defines no new_cluster, job_clusters, or existing_cluster_id.
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: '4'
+      tasks:
+        - task_key: pre_migrations
+          spark_python_task:
+            python_file: ../src/jobs/migration_runner.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --target
+              - ${bundle.target}
+              - --migration-root
+              - ${workspace.file_path}/src/migrations
+              - --commit-sha
+              - '{{job.parameters.commit_sha}}'
+          environment_key: default
+
