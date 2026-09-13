@@ -16,6 +16,7 @@ def parse_args():
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--schema", required=True)
     parser.add_argument("--target", required=True)
+    parser.add_argument("--phase", choices=("pre", "post"), required=True)
     parser.add_argument("--migration-root", required=True)
     parser.add_argument("--commit-sha", default="local")
     return parser.parse_args()
@@ -35,6 +36,7 @@ def main():
     args = parse_args()
     catalog = validate_identifier(args.catalog, "catalog")
     schema = validate_identifier(args.schema, "schema")
+    phase = args.phase
 
     spark = SparkSession.builder.getOrCreate()
     migration_table = f"`{catalog}`.`{schema}`.`_schema_migrations`"
@@ -55,7 +57,6 @@ def main():
         """
     )
 
-    phase = "pre"
     migration_dir = Path(args.migration_root) / phase
     if not migration_dir.is_dir():
         raise FileNotFoundError(f"Migration directory does not exist: {migration_dir}")
@@ -67,7 +68,7 @@ def main():
     applied = {row["migration_id"]: row["checksum"] for row in applied_rows}
 
     if not migration_files:
-        print("No pre migrations found. Nothing to do.")
+        print(f"No {phase} migrations found. Nothing to do.")
         return
 
     history_schema = StructType(
