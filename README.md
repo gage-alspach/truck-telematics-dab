@@ -2,7 +2,7 @@
 
 A self-contained take-home implementation for a real-time truck GPS pipeline on Databricks Free Edition.
 It uses **Lakeflow Spark Declarative Pipelines**, **Auto Loader**, a **stream-static join**, a current-state
-**materialized view**, and versioned **pre/post migration jobs** for controlled table changes.
+**materialized view**, and versioned **pre/post SQL migration jobs** for controlled table changes.
 
 ## Architecture
 
@@ -88,8 +88,8 @@ without classic cluster configuration.
 
 There are two concerns during a release:
 
-1. **Bundle deployment** delivers the Databricks resource definitions and application/pipeline code.
-2. **Migration jobs** execute versioned structural/data changes in a controlled, auditable step.
+1. **Bundle deployment** delivers Databricks resource definitions and application/pipeline code.
+2. **Migration jobs** execute versioned SQL structure/data changes in a controlled, auditable step.
 
 Humans do not manually alter the prod schema. Changes are committed to Git and executed through the same bundle-defined
 migration jobs in each environment.
@@ -111,6 +111,9 @@ After bootstrap, run the pre-migrations before the first pipeline run:
 databricks bundle run -t dev pre_migrations
 databricks bundle run -t dev telematics_orchestrator
 ```
+
+All SQL migrations are retained in Git, so a freshly recreated target can replay the full migration chain and
+converge on the same current reference/schema state before the first pipeline run.
 
 ### Normal release flow
 
@@ -152,18 +155,19 @@ Pre-migrations are for changes that must exist before the new application versio
 - adding a nullable column
 - adding backward-compatible structure that both old and new code can tolerate
 
-Post-migrations are for work that should occur only after the new application version exists. Typical examples are:
+Post-migrations are SQL data/schema changes that should occur only after the new application version exists. Typical
+examples are:
 
 - backfilling a newly introduced column after compatible code is deployed
 - cleanup/contraction work after the new code no longer depends on the old structure
-- other controlled data changes that should be gated on successful deployment
+- other controlled SQL changes that should be gated on successful deployment
 
 This follows an expand/deploy/backfill-or-contract pattern instead of coupling schema mutation directly to
 `databricks bundle deploy`.
 
 ## Migration behavior
 
-Migration files live permanently in source control under:
+Migration files are intentionally **SQL-only** and live permanently in source control under:
 
 ```text
 src/migrations/pre/
@@ -173,20 +177,22 @@ src/migrations/post/
 Each target keeps its own history table:
 
 ```text
-telematics.dev._schema_migrations
-telematics.test._schema_migrations
-telematics.prod._schema_migrations
+telematics.dev._migrations
+telematics.test._migrations
+telematics.prod._migrations
 ```
 
 The migration runner:
 
-- executes files in deterministic filename order
+- executes `.sql` files in deterministic filename order
 - records a migration only after it succeeds
 - stores migration ID, checksum, phase, applied time, target, and commit SHA
 - skips migrations already applied with the same checksum
 - fails if an already-applied migration file was later modified
 
 Applied migrations are immutable. A later correction is a new migration rather than an edit to migration history.
+Because the repository retains the complete SQL migration chain, recreating an empty target and replaying the files
+reconstructs the current managed reference/schema state without hand-written repair steps.
 
 The existing baseline migrations create `truck_details`, add `active_flag` idempotently, and seed the 20-row reference
 dimension with an insert-only `MERGE`.
@@ -229,18 +235,22 @@ current reference snapshot again, so reference corrections appear on the next re
 
 ## Schema changes to pipeline-owned Gold tables
 
-Reference/source structures such as `truck_details` are managed with migrations. Lakeflow-owned derived tables are
+Reference/source structures such as `truck_details` are managed with SQL migrations. Lakeflow-owned derived tables are
 changed through the pipeline definition rather than by manually altering them in the SQL editor.
 
-When a pipeline logic/schema change needs historical Gold rows recomputed, rebuild the derived state from retained
-upstream data using a full or selective pipeline refresh. Bronze/Silver remain the replay source rather than treating
-the checkpoint or current Gold contents as authoritative data.
+When a pipeline logic/schema change requires historical Gold rows to be recomputed, a **manual full or selective
+pipeline refresh is an accepted operational step in this take-home design**. The refresh is not stored as a migration
+because it is pipeline lifecycle control rather than durable schema/reference state. Bronze/Silver remain the replay
+source rather than treating checkpoint or current Gold contents as authoritative data.
 
 Example full refresh:
 
 ```bash
 databricks bundle run -t dev telematics_pipeline --full-refresh-all
 ```
+
+A freshly recreated target does not need this transition step: after its SQL migrations replay, the first normal
+pipeline execution builds Gold from the current definitions.
 
 ## Schema drift demo
 
@@ -287,7 +297,7 @@ Be ready to explain:
 - how the stream-static join behaves
 - why the current-state MV re-reads the current reference snapshot
 - why migrations are separate from normal ingestion runs
-- the difference between pre- and post-deployment migrations
-- why pipeline-owned Gold schema changes are made in code and historical corrections use rebuilds
-- how `_schema_migrations` keeps promotion apply-once and traceable
+- the difference between pre- and post-deployment SQL migrations
+- why `_migrations` is apply-once, checksum-protected history
+- why pipeline full refresh is an operational transition rather than a migration
 - how the design would change at hundreds of thousands of trucks
