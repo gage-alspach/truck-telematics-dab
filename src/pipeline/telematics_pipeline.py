@@ -22,7 +22,6 @@ def bronze_pings():
         .option("cloudFiles.format", "json")
         .option("cloudFiles.schemaLocation", SCHEMA_LOCATION)
         .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
-        # JSON stays string-typed in Bronze; Silver owns conformance.
         .option("cloudFiles.inferColumnTypes", "false")
         .option("rescuedDataColumn", "_rescued_data")
         .load(LANDING_PATH)
@@ -35,10 +34,7 @@ def bronze_pings():
     name="silver_pings",
     comment="Typed, valid, deduplicated GPS pings with bounded event-time state.",
 )
-@dp.expect_or_drop(
-    "required_fields",
-    "truck_id IS NOT NULL AND event_ts IS NOT NULL",
-)
+@dp.expect_or_drop("required_fields", "truck_id IS NOT NULL AND event_ts IS NOT NULL")
 @dp.expect_or_drop(
     "valid_coordinates",
     "latitude BETWEEN -90.0 AND 90.0 AND longitude BETWEEN -180.0 AND 180.0",
@@ -57,11 +53,8 @@ def silver_pings():
         )
     )
 
-    # The generated source is near-real-time. In production this value should be
-    # based on observed lateness and the business tolerance for very-late pings.
-    return (
-        conformed.withWatermark("event_ts", WATERMARK)
-        .dropDuplicates(["truck_id", "event_ts", "latitude", "longitude"])
+    return conformed.withWatermark("event_ts", WATERMARK).dropDuplicates(
+        ["truck_id", "event_ts", "latitude", "longitude"]
     )
 
 
@@ -88,6 +81,7 @@ def gold_pings_enriched():
             F.col("d.make").alias("make"),
             F.col("d.model").alias("model"),
             F.col("d.capacity_lbs").alias("capacity_lbs"),
+            F.col("d.truck_class").alias("truck_class"),
             F.col("d.home_depot").alias("home_depot"),
             F.col("d.region").alias("region"),
             F.col("d.driver").alias("driver"),
@@ -101,9 +95,6 @@ def gold_pings_enriched():
     comment="One current position row per truck, enriched with the latest reference data.",
 )
 def gold_truck_current():
-    # This is intentionally a batch read for a materialized current-state result.
-    # Rejoining truck_details here means reference changes are reflected on the
-    # next Gold refresh even when a truck has not emitted a brand-new ping.
     silver = spark.read.table("silver_pings")
     details = F.broadcast(spark.read.table(TRUCK_DETAILS)).alias("d")
 
@@ -128,6 +119,7 @@ def gold_truck_current():
             F.col("d.make").alias("make"),
             F.col("d.model").alias("model"),
             F.col("d.capacity_lbs").alias("capacity_lbs"),
+            F.col("d.truck_class").alias("truck_class"),
             F.col("d.home_depot").alias("home_depot"),
             F.col("d.region").alias("region"),
             F.col("d.driver").alias("driver"),
