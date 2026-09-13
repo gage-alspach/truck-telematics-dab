@@ -125,19 +125,21 @@ In the successful pipeline run you can see the bronze has 20 more rows than silv
 
 ## 5. Migration proof
 
-Show:
+After the next clean deployment, show:
 
 ```sql
 SELECT *
-FROM telematics.prod._schema_migrations
+FROM telematics.prod._migrations
 ORDER BY applied_at;
 ```
-<img width="1254" height="320" alt="schema migration - prod" src="https://github.com/user-attachments/assets/8fc6e537-87b5-4761-b6e9-984430bb42b8" />
+
+The existing screenshots below were captured before the history table was renamed from `_schema_migrations` to `_migrations`; replace them with fresh screenshots after the planned destroy/redeploy.
+
+<img width="1254" height="320" alt="migration history - prod" src="https://github.com/user-attachments/assets/8fc6e537-87b5-4761-b6e9-984430bb42b8" />
 
 <img width="1595" height="595" alt="migrations working - prod env" src="https://github.com/user-attachments/assets/24325d56-297d-4809-9a65-54bf63ba9c72" />
 
-The history should include the table-creation, `active_flag`, and initial fleet seed migrations.
-
+The history should include the table-creation, `active_flag`, and initial fleet seed migrations. On the migration-demonstration branch it should additionally show the `truck_class` pre- and post-migrations after promotion.
 
 ## 6. Optional schema-drift proof
 
