@@ -1,0 +1,30 @@
+resources:
+  jobs:
+    post_migrations:
+      name: telematics-${bundle.target}-post-migrations
+      max_concurrent_runs: 1
+      parameters:
+        - name: commit_sha
+          default: local
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: '4'
+      tasks:
+        - task_key: post_migrations
+          spark_python_task:
+            python_file: ../src/jobs/migration_runner.py
+            parameters:
+              - --catalog
+              - ${var.catalog}
+              - --schema
+              - ${var.schema}
+              - --target
+              - ${bundle.target}
+              - --phase
+              - post
+              - --migration-root
+              - ${workspace.file_path}/src/migrations
+              - --commit-sha
+              - '{{job.parameters.commit_sha}}'
+          environment_key: default
