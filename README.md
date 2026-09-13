@@ -2,7 +2,7 @@
 
 A self-contained take-home implementation for a real-time truck GPS pipeline on Databricks Free Edition.
 It uses **Lakeflow Spark Declarative Pipelines**, **Auto Loader**, a **stream-static join**, a current-state
-**materialized view**, and a small **migration runner** that promotes table changes through dev -> test -> prod.
+**materialized view**, and versioned **pre/post migration jobs** for controlled table changes.
 
 ## Architecture
 
@@ -38,6 +38,7 @@ silver_pings + current truck_details
 |-- resources/
 |   |-- job.yml
 |   |-- migrations.yml
+|   |-- post_migrations.yml
 |   |-- pipeline.yml
 |   `-- storage.yml
 |-- src/
@@ -45,7 +46,8 @@ silver_pings + current truck_details
 |   |   |-- generate_pings.py
 |   |   `-- migration_runner.py
 |   |-- migrations/
-|   |   `-- pre/
+|   |   |-- pre/
+|   |   `-- post/
 |   |-- pipeline/
 |   |   `-- telematics_pipeline.py
 |   `-- sql/
@@ -57,15 +59,12 @@ silver_pings + current truck_details
 ## Prerequisites
 
 1. A Databricks Free Edition workspace.
-2. A recent Databricks CLI. This project explicitly uses the **direct** bundle deployment engine and
-   native Unity Catalog schema/volume resources.
+2. A recent Databricks CLI.
 3. Authentication configured for the workspace (`databricks auth login` or `databricks configure`).
 4. A writable Unity Catalog catalog named `telematics`.
 
-The exercise itself assumes the `telematics` catalog. If your Free Edition account cannot create or use it,
-change the top-level `catalog` variable in `databricks.yml` to an existing writable catalog. The bundle owns
-and creates the target-specific **schemas** and **landing volume**; the catalog is intentionally treated as
-shared platform infrastructure because dev/test/prod all live under the same catalog.
+The bundle owns the target-specific schemas and landing volumes. The shared `telematics` catalog is treated as
+existing platform infrastructure because dev/test/prod all live in one workspace.
 
 Sanity check:
 
@@ -73,126 +72,105 @@ Sanity check:
 databricks current-user me
 ```
 
-## Validate and deploy
+## Targets
 
-There are two deployment flows: a one-time bootstrap for a new target and the normal
-release flow after the pre-migration job exists.
+The bundle defines three targets in one workspace:
 
-For the **first deployment** of each target, only validate and deploy the bundle so
-Databricks can create the `pre_migrations` job. Do not run migrations or the orchestrator
-as part of this bootstrap step. After bootstrap, use the subsequent release flow below
-to apply migrations and refresh the pipeline.
+- `dev` - manual execution, schema `telematics.dev`
+- `test` - hourly schedule encoded but paused, schema `telematics.test`
+- `prod` - 15-minute schedule encoded but paused, schema `telematics.prod`
 
-**First deployment - dev:**
+The schedules are deliberately paused so deploying this take-home does not consume Free Edition quota unexpectedly.
+All compute is serverless. The pipeline declares `serverless: true`, and Python job tasks use serverless environments
+without classic cluster configuration.
+
+## Deployment model
+
+There are two concerns during a release:
+
+1. **Bundle deployment** delivers the Databricks resource definitions and application/pipeline code.
+2. **Migration jobs** execute versioned structural/data changes in a controlled, auditable step.
+
+Humans do not manually alter the prod schema. Changes are committed to Git and executed through the same bundle-defined
+migration jobs in each environment.
+
+### First deployment of a target
+
+A new target must first be deployed so the migration jobs and other resources exist:
 
 ```bash
 databricks bundle validate -t dev
 databricks bundle deploy -t dev
 ```
 
-**First deployment - test:**
+Repeat with `-t test` or `-t prod` for the other targets.
+
+After bootstrap, run the pre-migrations before the first pipeline run:
 
 ```bash
-databricks bundle validate -t test
-databricks bundle deploy -t test
+databricks bundle run -t dev pre_migrations
+databricks bundle run -t dev telematics_orchestrator
 ```
 
-**First deployment - prod:**
+### Normal release flow
 
-```bash
-databricks bundle validate -t prod
-databricks bundle deploy -t prod
+For an existing target, the intended order is:
+
+```text
+validate
+  -> publish/sync the new migration files
+  -> run pre_migrations
+  -> bundle deploy
+  -> run post_migrations when the release contains post-deploy work
+  -> run or refresh the pipeline
 ```
 
-For **later releases**, validate the bundle, sync the new source files, run pre-migrations,
-and then deploy the resource definitions. The sync is necessary
-because the already-deployed pre-migration job must be able to see the migration files
-from the new release before the full bundle deployment.
-
-**Subsequent release - dev:**
+The pre-migration job already exists from the prior deployment, so the new migration files must be made visible to that
+job before invoking it. With the CLI this can be done with `bundle sync` before the pre-migration run:
 
 ```bash
 databricks bundle validate -t dev
 databricks bundle sync -t dev
 databricks bundle run -t dev pre_migrations
 databricks bundle deploy -t dev
+databricks bundle run -t dev post_migrations
 databricks bundle run -t dev telematics_orchestrator
 ```
 
-**Subsequent release - test:**
+`post_migrations` is safe to run even when a release contains no post SQL files; the runner simply reports that there
+is nothing to apply. For releases that do not require post-deploy work, that step may be omitted to conserve Free
+Edition resources.
 
-```bash
-databricks bundle validate -t test
-databricks bundle sync -t test
-databricks bundle run -t test pre_migrations
-databricks bundle deploy -t test
-databricks bundle run -t test telematics_orchestrator
-```
+The same release sequence is promoted through test and prod. Releases should be serialized per target and stopped on
+any failed validation, migration, deployment, or pipeline run.
 
-**Subsequent release - prod:**
+## Why pre and post migrations are separate
 
-```bash
-databricks bundle validate -t prod
-databricks bundle sync -t prod
-databricks bundle run -t prod pre_migrations
-databricks bundle deploy -t prod
-databricks bundle run -t prod telematics_orchestrator
-```
+Pre-migrations are for changes that must exist before the new application version is deployed. Typical examples are:
 
-In sequence, the normal release flow is:
+- creating a new reference table
+- adding a nullable column
+- adding backward-compatible structure that both old and new code can tolerate
 
-```text
-validate -> sync -> pre-migrations -> deploy -> orchestrator
-```
+Post-migrations are for work that should occur only after the new application version exists. Typical examples are:
 
-`bundle run` takes a deployed resource key, not a Python filename. Sync uploads the new
-migration SQL and runner before invoking the existing pre-migration job. If the migration
-job definition or its arguments change, deploy those compatible changes first. Keep the
-orchestrator paused and wait for active runs to finish before syncing; sync updates application
-files too. Serialize releases per target, stop on any failed command, and resume schedules only
-after successful migrations. Job concurrency limits do not lock other jobs or deployments.
+- backfilling a newly introduced column after compatible code is deployed
+- cleanup/contraction work after the new code no longer depends on the old structure
+- other controlled data changes that should be gated on successful deployment
 
-Optionally pass `--params commit_sha=<commit>` to the migration job for traceability.
-
-The test target contains an hourly cron and prod a 15-minute cron. Both are delivered **PAUSED** so deploying
-this take-home cannot unexpectedly consume Free Edition quota. Dev is manual. Change `pause_status` to
-`UNPAUSED` when you intentionally want those schedules active.
-
-All Databricks compute in this bundle is serverless. The pipeline declares `serverless: true` explicitly.
-For Python job tasks, Databricks expresses serverless compute with an `environment_key` and no classic cluster
-configuration; the bundle therefore intentionally has no `new_cluster`, `job_clusters`, or
-`existing_cluster_id` settings.
-
-## What the orchestrator does
-
-Every scheduled or manual orchestrator run performs:
-
-1. `generate_pings` - write synthetic JSON files under the target landing volume.
-2. `refresh_pipeline` - run the triggered Lakeflow pipeline.
-
-The separate, unscheduled `pre_migrations` job applies SQL changes during release. Run it before
-the first orchestrator run to create and seed the reference table. The job has
-`max_concurrent_runs: 1`; the release process must still avoid overlapping it with deployments.
-
-This take-home implements only pre-migrations to reduce Databricks Free Edition compute use.
-Pre-migrations run before application deployment and are best suited to **expansion** changes,
-such as adding tables or columns that both the old and new application versions can tolerate.
-A production release process would commonly add a post-migration phase after deployment for
-**contraction** changes, such as removing obsolete columns or tables after the new application
-version no longer depends on them. Contraction migrations require extra care because rollback
-may need the removed schema or data.
+This follows an expand/deploy/backfill-or-contract pattern instead of coupling schema mutation directly to
+`databricks bundle deploy`.
 
 ## Migration behavior
 
-Migrations live permanently in source control and are named with a timestamp plus a readable slug:
+Migration files live permanently in source control under:
 
 ```text
-20260908_170000_create_truck_details.sql
-20260908_171500_add_active_flag.sql
-20260908_173000_seed_truck_details.sql
+src/migrations/pre/
+src/migrations/post/
 ```
 
-Each environment has its own table:
+Each target keeps its own history table:
 
 ```text
 telematics.dev._schema_migrations
@@ -200,87 +178,116 @@ telematics.test._schema_migrations
 telematics.prod._schema_migrations
 ```
 
-The runner reads that table once, checks each migration checksum, skips migrations already applied, executes
-pending files in filename order, and records a migration **only after success**. An already-applied migration
-whose file contents changed fails fast; add a new migration instead of editing history.
+The migration runner:
 
-Each file contains one top-level Databricks SQL statement. Multi-statement work can be wrapped in a
-`BEGIN ... END` scripting block. The `active_flag` migration demonstrates a safe column-add by checking
-`information_schema.columns` before issuing the `ALTER TABLE`.
+- executes files in deterministic filename order
+- records a migration only after it succeeds
+- stores migration ID, checksum, phase, applied time, target, and commit SHA
+- skips migrations already applied with the same checksum
+- fails if an already-applied migration file was later modified
 
-Run just pre-migrations if you want to inspect the framework directly:
+Applied migrations are immutable. A later correction is a new migration rather than an edit to migration history.
 
-```bash
-databricks bundle run -t dev pre_migrations
+The existing baseline migrations create `truck_details`, add `active_flag` idempotently, and seed the 20-row reference
+dimension with an insert-only `MERGE`.
+
+## What the orchestrator does
+
+The scheduled/manual `telematics_orchestrator` is intentionally small:
+
+1. `generate_pings` writes synthetic JSON files into the target landing volume.
+2. `refresh_pipeline` executes the triggered Lakeflow pipeline.
+
+Schema migrations are separate release jobs rather than tasks in the recurring ingestion workflow. This keeps normal
+pipeline execution from repeatedly paying for migration-job tasks and makes release-time structural changes explicit.
+
+## Pipeline behavior
+
+### Bronze
+
+`bronze_pings` uses Auto Loader with a target-specific schema location. Bronze remains close to the source, records
+source-file and ingestion metadata, allows additive schema evolution, and keeps rescued data observable.
+
+### Silver
+
+`silver_pings` casts the expected source fields, drops missing/invalid coordinates with Lakeflow expectations, and
+watermark-deduplicates on:
+
+```text
+truck_id + event_ts + latitude + longitude
 ```
 
-The seed migration inserts the 20 explicit demo trucks only when their IDs are missing.
-It preserves existing truck attributes, including on environments seeded by the former Python task.
-After success it is skipped using migration history; ongoing reference updates are separate from seeding.
+The 10-minute watermark is a demo assumption and would be tuned from observed source lateness in production.
 
-## Schema drift demo
+### Gold
 
-The generator can intentionally simulate two upstream changes:
+`gold_pings_enriched` is the required stream-static integration. It joins streaming Silver pings to the small static
+`truck_details` Delta table and broadcasts the reference side.
 
-```bash
-# New source field: Auto Loader evolves Bronze schema.
-databricks bundle run -t dev \
-  --params drift_mode=add_column,batches=3 \
-  telematics_orchestrator
+`gold_truck_current` is a materialized current-state view. It finds the latest valid ping per truck and joins the
+current reference snapshot again, so reference corrections appear on the next refresh even when no new ping arrives.
 
-# Rename latitude -> lat: Bronze retains the drift; inspect pipeline expectation
-# metrics and recent Bronze rows to observe the missing latitude values.
-databricks bundle run -t dev \
-  --params drift_mode=rename_latitude,batches=3 \
-  telematics_orchestrator
-```
+## Schema changes to pipeline-owned Gold tables
 
-Bronze uses Auto Loader `addNewColumns`. A new column can cause the first update to stop after Auto Loader
-persists the evolved schema. The pipeline task therefore has retries configured. Silver and Gold do **not**
-automatically adopt arbitrary new business fields; those remain reviewed schema-contract changes.
+Reference/source structures such as `truck_details` are managed with migrations. Lakeflow-owned derived tables are
+changed through the pipeline definition rather than by manually altering them in the SQL editor.
 
-## Rebuild / checkpoint behavior
+When a pipeline logic/schema change needs historical Gold rows recomputed, rebuild the derived state from retained
+upstream data using a full or selective pipeline refresh. Bronze/Silver remain the replay source rather than treating
+the checkpoint or current Gold contents as authoritative data.
 
-Lakeflow manages the streaming state/checkpoints. Normal stop/restart keeps that state and continues
-incrementally. Bronze is the retained replay source. If Silver logic needs historical correction, intentionally
-reset/recompute the pipeline rather than treating the checkpoint as data:
+Example full refresh:
 
 ```bash
 databricks bundle run -t dev telematics_pipeline --full-refresh-all
 ```
 
-You can also selectively full refresh named tables with the current bundle CLI.
+## Schema drift demo
+
+The generator supports two optional drift modes:
+
+```bash
+# Add a source field; Auto Loader evolves Bronze.
+databricks bundle run -t dev \
+  --params drift_mode=add_column,batches=3 \
+  telematics_orchestrator
+
+# Rename latitude -> lat to demonstrate a breaking source change.
+databricks bundle run -t dev \
+  --params drift_mode=rename_latitude,batches=3 \
+  telematics_orchestrator
+```
+
+Bronze may evolve for additive source fields, but Silver and Gold do not automatically adopt arbitrary business
+fields. Curated schema changes remain reviewed code/migration changes.
 
 ## Query the result
 
-Open `src/sql/sample_queries.sql`, or run equivalent queries in the SQL editor. The core proof query is:
-
 ```sql
 SELECT *
-FROM telematics.dev.gold_truck_current
+FROM telematics.prod.gold_truck_current
 ORDER BY truck_id;
 ```
 
-Expected result: up to one current row for each truck with GPS coordinates plus driver/depot/region details.
+The result contains the latest coordinates per truck plus the static driver/depot/region reference attributes.
+See `src/sql/sample_queries.sql` for additional examples.
 
-## CI stretch
+## Free Edition note
 
-`.github/workflows/deploy-dev.yml` validates and deploys the dev target on push, then runs pre-migrations.
-This deploy-first sequence supports fresh environments; schedules remain paused. Add repository secrets:
+The required thin slice is intentionally prioritized over optional compute-heavy demonstrations. Test/prod schedules
+remain paused, migration jobs are run only during releases, and optional drift/full-refresh demonstrations may be
+skipped when Free Edition quota is exhausted.
 
-- `DATABRICKS_HOST`
-- `DATABRICKS_TOKEN`
-
-For a real production system, prefer GitHub OIDC/workload identity with a service principal and protect the
-prod environment with an approval gate.
-
-## Notes for the live walkthrough
+## Live walkthrough topics
 
 Be ready to explain:
 
-- Why Lakeflow was chosen over hand-rolled Structured Streaming.
-- Why the dedup key is `truck_id + event_ts + latitude + longitude` and why the watermark is 10 minutes.
-- The difference between the event-level stream-static enrichment and the current-state materialized view.
-- Why schema drift is tolerated in Bronze but curated schema changes are reviewed/migrated.
-- How `_schema_migrations` makes promotion apply-once and traceable.
-- Why a full refresh rebuilds derived data from Bronze rather than treating checkpoints as the source of truth.
+- why Lakeflow was chosen over hand-rolled Structured Streaming
+- the deduplication key and watermark assumption
+- how the stream-static join behaves
+- why the current-state MV re-reads the current reference snapshot
+- why migrations are separate from normal ingestion runs
+- the difference between pre- and post-deployment migrations
+- why pipeline-owned Gold schema changes are made in code and historical corrections use rebuilds
+- how `_schema_migrations` keeps promotion apply-once and traceable
+- how the design would change at hundreds of thousands of trucks
