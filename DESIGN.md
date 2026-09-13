@@ -89,8 +89,13 @@ reference-data state; a Lakeflow full refresh is an operational transition that 
 
 When a deployed pipeline schema/logic change requires historical Gold rows to be recalculated, an explicit full
 or selective refresh is acceptable. That step can be performed with the bundle CLI, while Bronze/Silver remain
-the replay source. A freshly recreated target does not need the transition-only refresh because its first normal
-pipeline run builds derived tables from the current definitions after all SQL migrations have replayed.
+the replay source.
+
+The tradeoff is intentional: some operational recovery actions remain manual, but the durable environment state
+is reproducible. In a worst-case rebuild, the bundle recreates managed resources, the retained migration chain
+reconstructs the current schema/reference state, and the current declarative pipeline definition rebuilds derived
+state from retained source data or newly generated demo input. A freshly recreated target therefore does not need
+a transition-only full refresh; its first normal pipeline run builds the derived tables from the current code.
 
 ## Scale
 
