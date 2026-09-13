@@ -243,6 +243,11 @@ pipeline refresh is an accepted operational step in this take-home design**. The
 because it is pipeline lifecycle control rather than durable schema/reference state. Bronze/Silver remain the replay
 source rather than treating checkpoint or current Gold contents as authoritative data.
 
+That manual operational step is an intentional tradeoff: the durable environment definition remains reproducible. In
+a worst-case rebuild, the bundle recreates the managed resources, the complete SQL migration history reconstructs the
+current schema/reference state, and the current pipeline definition rebuilds derived tables from the retained source
+or newly generated demo input.
+
 Example full refresh:
 
 ```bash
@@ -300,4 +305,5 @@ Be ready to explain:
 - the difference between pre- and post-deployment SQL migrations
 - why `_migrations` is apply-once, checksum-protected history
 - why pipeline full refresh is an operational transition rather than a migration
+- how the migration history supports rebuilding an environment from scratch
 - how the design would change at hundreds of thousands of trucks
