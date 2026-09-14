@@ -64,6 +64,10 @@ A normal existing-environment release is therefore:
 validate -> sync migration files -> pre migrations -> deploy -> post migrations -> pipeline run/refresh
 ```
 
+For destructive post migrations, the post step can be deliberately gated on a successful run of the newly
+deployed code before the contraction is applied. Schedules remain paused and releases are serialized while that
+compatibility check is performed.
+
 A new environment first deploys the bundle so the migration jobs exist, then replays the retained SQL migration
 chain before its first pipeline execution. This makes the repository capable of reconstructing the current
 managed reference/schema state from an empty target without manual SQL edits.
@@ -75,8 +79,8 @@ bundle target, and commit SHA.
 The runner loads applied IDs once, executes pending files in deterministic filename order, records a migration
 only after success, and fails if the checksum of an already-applied migration changes. Applied files remain in
 Git forever. One top-level SQL statement is allowed per file; multi-step logic can use a `BEGIN ... END` block.
-The included `active_flag` migration checks `information_schema.columns` before issuing `ALTER TABLE`, and seed
-or backfill work uses idempotent `MERGE` patterns where appropriate.
+The baseline `active_flag` migration checks `information_schema.columns` before issuing `ALTER TABLE`, and seed
+or backfill work uses idempotent patterns where appropriate.
 
 Rollback is **forward-fix by default**: applied migrations are immutable. A destructive reverse operation is a
 new reviewed migration, and data-impacting rollback would use Delta history/restore only when retention and
@@ -84,16 +88,32 @@ business requirements make that safe.
 
 ## Migration demonstration
 
-This branch adds a real schema-evolution release:
+This branch demonstrates a real **contract/post-migration** release by removing the obsolete `active_flag`
+attribute.
 
-1. Pre migration `20260913_00_add_truck_class.sql` adds a nullable `truck_class` column.
-2. The new pipeline definition exposes `truck_class` in both Gold outputs.
-3. Post migration `20260913_01_backfill_truck_class.sql` populates the new attribute from `capacity_lbs`.
-4. If existing historical Gold rows need the new reference attribute, perform an explicit full refresh after the post migration.
+1. The baseline environment already contains `truck_details.active_flag`, and the baseline pipeline selects it
+   into both Gold outputs.
+2. This branch changes the pipeline definition so neither Gold output references `active_flag`.
+3. The updated pipeline is deployed first.
+4. Because hard deletion of an output column from a pipeline-managed streaming table is not checkpoint-compatible,
+   the pipeline is explicitly full-refreshed to reconcile the declarative Gold schema and prove the new version no
+   longer depends on `active_flag`.
+5. Post migration `20260914_00_drop_active_flag.sql` then enables Delta column mapping on the static
+   `truck_details` table and drops `active_flag`.
+6. A normal pipeline run after the post migration verifies that the deployed application continues to work after
+   the contraction.
 
-The migration chain itself remains replayable from scratch. On a newly recreated environment, all SQL migrations
-run before the first pipeline execution, so the current pipeline builds Gold with `truck_class` immediately and
-no transition-only full refresh is required.
+This sequencing demonstrates why a destructive drop belongs in **post**, not pre: dropping the source/reference
+column before deploying compatible code could break the existing pipeline. Delaying the contraction preserves a
+safe deployment boundary and makes rollback easier until the new code has been proven.
+
+The migration is idempotent because it first checks `information_schema.columns`; if `active_flag` is already
+absent, it performs no action. Column mapping is enabled because Databricks requires it for metadata-only Delta
+column drops.
+
+A freshly recreated environment remains reproducible. Baseline pre-migrations create and seed `truck_details`
+with `active_flag`, the current pipeline definition is deployed without that dependency, and the retained post
+migration removes the obsolete persistent column. No manual SQL edit is required.
 
 ## Pipeline refresh and rebuilds
 
@@ -108,7 +128,7 @@ The tradeoff is intentional: some operational recovery actions remain manual, bu
 is reproducible. In a worst-case rebuild, the bundle recreates managed resources, the retained migration chain
 reconstructs the current schema/reference state, and the current declarative pipeline definition rebuilds derived
 state from retained source data or newly generated demo input. A freshly recreated target therefore does not need
-a transition-only full refresh; its first normal pipeline run builds the derived tables from the current code.
+a transition-only refresh for historical compatibility; its first run builds derived tables from the current code.
 
 ## Scale
 
