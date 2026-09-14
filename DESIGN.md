@@ -56,17 +56,20 @@ Migrations are separate unscheduled release jobs rather than tasks in the recurr
 runner supports two phases:
 
 - **pre** - backward-compatible structure required before the new pipeline version is deployed
-- **post** - SQL backfill or contraction work that should occur only after deployment succeeds
+- **post** - SQL backfill or contraction work that should occur after the new bundle version is deployed
 
-A normal existing-environment release is therefore:
+For an existing environment, the automated release unit is always the same five-step sequence:
 
 ```text
-validate -> sync migration files -> pre migrations -> deploy -> post migrations -> pipeline run/refresh
+validate -> sync migration files -> pre migrations -> deploy -> post migrations
 ```
 
-For destructive post migrations, the post step can be deliberately gated on a successful run of the newly
-deployed code before the contraction is applied. Schedules remain paused and releases are serialized while that
-compatibility check is performed.
+The release does not selectively omit individual stages. A phase with no pending SQL simply completes with no
+migration applied. Any operational action required by a specific release, such as a Lakeflow full refresh or a
+verification run, occurs **after** this release block completes.
+
+Schedules remain paused and releases are serialized while this sequence runs so an old pipeline version cannot
+execute against schema that has already been contracted.
 
 A new environment first deploys the bundle so the migration jobs exist, then replays the retained SQL migration
 chain before its first pipeline execution. This makes the repository capable of reconstructing the current
@@ -91,21 +94,28 @@ business requirements make that safe.
 This branch demonstrates a real **contract/post-migration** release by removing the obsolete `active_flag`
 attribute.
 
-1. The baseline environment already contains `truck_details.active_flag`, and the baseline pipeline selects it
-   into both Gold outputs.
-2. This branch changes the pipeline definition so neither Gold output references `active_flag`.
-3. The updated pipeline is deployed first.
-4. Because hard deletion of an output column from a pipeline-managed streaming table is not checkpoint-compatible,
-   the pipeline is explicitly full-refreshed to reconcile the declarative Gold schema and prove the new version no
-   longer depends on `active_flag`.
-5. Post migration `20260914_00_drop_active_flag.sql` then enables Delta column mapping on the static
-   `truck_details` table and drops `active_flag`.
-6. A normal pipeline run after the post migration verifies that the deployed application continues to work after
-   the contraction.
+The baseline environment contains `truck_details.active_flag`, and the baseline pipeline selects it into both
+Gold outputs. This branch changes the pipeline definition so neither Gold output references it, and adds
+`post/20260914_00_drop_active_flag.sql` to remove the obsolete persistent column.
 
-This sequencing demonstrates why a destructive drop belongs in **post**, not pre: dropping the source/reference
-column before deploying compatible code could break the existing pipeline. Delaying the contraction preserves a
-safe deployment boundary and makes rollback easier until the new code has been proven.
+The normal automated release block is run unchanged:
+
+```text
+validate
+-> sync
+-> pre_migrations          # no new pre migration in this release
+-> bundle deploy           # deploy code that no longer references active_flag
+-> post_migrations         # drop active_flag from truck_details
+```
+
+Only after that complete release block does this particular change require an operational step: because
+`gold_pings_enriched` is a pipeline-managed streaming table whose output schema lost a column, an explicit full
+refresh reconciles the declarative Gold schema. A final normal pipeline run can then be used as verification.
+
+This demonstrates why the destructive drop belongs in **post**, not pre. If deployment fails, the post phase is
+never reached and the old pipeline still has the column it expects. If the post migration succeeds, the deployed
+pipeline definition is already compatible with the contracted reference table. The later full refresh is a
+pipeline lifecycle action, not a durable schema migration.
 
 The migration is idempotent because it first checks `information_schema.columns`; if `active_flag` is already
 absent, it performs no action. Column mapping is enabled because Databricks requires it for metadata-only Delta
@@ -121,8 +131,8 @@ Full refresh is deliberately **not modeled as a migration**. SQL migrations repr
 reference-data state; a Lakeflow full refresh is an operational transition that recomputes derived state.
 
 When a deployed pipeline schema/logic change requires historical Gold rows to be recalculated, an explicit full
-or selective refresh is acceptable. That step can be performed with the bundle CLI, while Bronze/Silver remain
-the replay source.
+or selective refresh is acceptable after the standard release block. That step can be performed with the bundle
+CLI, while Bronze/Silver remain the replay source.
 
 The tradeoff is intentional: some operational recovery actions remain manual, but the durable environment state
 is reproducible. In a worst-case rebuild, the bundle recreates managed resources, the retained migration chain
