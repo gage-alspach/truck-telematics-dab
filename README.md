@@ -194,27 +194,41 @@ Applied migrations are immutable. A later correction is a new migration rather t
 Because the repository retains the complete SQL migration chain, recreating an empty target and replaying the files
 reconstructs the current managed reference/schema state without hand-written repair steps.
 
-The existing baseline migrations create `truck_details`, add `active_flag` idempotently, and seed the 20-row reference
+The baseline migrations create `truck_details`, add `active_flag` idempotently, and seed the 20-row reference
 dimension with an insert-only `MERGE`.
 
-## Migration demonstration
+## Migration demonstration on this branch
 
-This branch demonstrates an expand/deploy/backfill change:
+This branch demonstrates a **post-deployment contraction**, which is the strongest use case for the post-migration
+phase. The baseline application reads `truck_details.active_flag` into both Gold outputs. This branch removes that
+application dependency first and only then removes the persistent column.
 
 ```text
-pre/20260913_00_add_truck_class.sql
-  -> add nullable truck_class
-
 bundle deploy
-  -> Gold definitions begin selecting truck_class
+  -> deploy pipeline code that no longer references active_flag
 
-post/20260913_01_backfill_truck_class.sql
-  -> populate LIGHT / MEDIUM / HEAVY from capacity_lbs
+full refresh pipeline
+  -> reconcile the declarative Gold schema and prove the new code runs without active_flag
+
+post/20260914_00_drop_active_flag.sql
+  -> enable Delta column mapping on truck_details if the column still exists
+  -> drop active_flag from the managed reference table
+
+normal pipeline run
+  -> verify the deployed pipeline still succeeds after the contraction
 ```
 
-If existing historical event-level Gold must be recomputed with the new attribute, an explicit full refresh is then
-performed as an operational step. A fresh environment does not need that transition-only refresh; replaying the SQL
-migrations before the first normal pipeline run produces the current schema/reference state directly.
+The full refresh is an operational step rather than a migration. It is required here because hard deletion of a
+column from the schema of a pipeline-managed streaming table is not checkpoint-compatible. The persistent
+`truck_details` contraction remains a versioned SQL post-migration.
+
+For this demonstration, schedules should remain paused and the release should be serialized. That prevents the old
+pipeline version from running between deployment and the post-migration drop. In a larger production release process,
+a destructive post migration would normally be gated on a successful compatibility/smoke run of the new version.
+
+A fresh environment still replays the complete SQL migration chain: baseline pre-migrations create and seed
+`truck_details` with `active_flag`, the current pipeline definition is deployed without that dependency, and the post
+migration removes the obsolete column. No manual schema edit is required.
 
 ## What the orchestrator does
 
@@ -273,11 +287,57 @@ Example full refresh:
 databricks bundle run -t dev telematics_pipeline --full-refresh-all
 ```
 
-A freshly recreated target does not need this transition step: after its SQL migrations replay, the first normal
-pipeline execution builds Gold from the current definitions.
+A freshly recreated target does not need this transition step for historical compatibility; after its SQL migrations
+replay, the first run builds the declarative datasets from the current definitions.
+
+## Schema drift demo
+
+The generator supports two optional drift modes:
+
+```bash
+# Add a source field; Auto Loader evolves Bronze.
+databricks bundle run -t dev \
+  --params drift_mode=add_column,batches=3 \
+  telematics_orchestrator
+
+# Rename latitude -> lat to demonstrate a breaking source change.
+databricks bundle run -t dev \
+  --params drift_mode=rename_latitude,batches=3 \
+  telematics_orchestrator
+```
+
+Bronze may evolve for additive source fields, but Silver and Gold do not automatically adopt arbitrary business
+fields. Curated schema changes remain reviewed code/migration changes.
+
+## Query the result
+
+```sql
+SELECT *
+FROM telematics.prod.gold_truck_current
+ORDER BY truck_id;
+```
+
+The result contains the latest coordinates per truck plus the static driver/depot/region reference attributes.
+See `src/sql/sample_queries.sql` for additional examples.
 
 ## Free Edition note
 
 The required thin slice is intentionally prioritized over optional compute-heavy demonstrations. Test/prod schedules
 remain paused, migration jobs are run only during releases, and optional drift/full-refresh demonstrations may be
 skipped when Free Edition quota is exhausted.
+
+## Live walkthrough topics
+
+Be ready to explain:
+
+- why Lakeflow was chosen over hand-rolled Structured Streaming
+- the deduplication key and watermark assumption
+- how the stream-static join behaves
+- why the current-state MV re-reads the current reference snapshot
+- why migrations are separate from normal ingestion runs
+- the difference between pre- and post-deployment SQL migrations
+- why dropping `active_flag` is deliberately a post-deployment contraction
+- why `_migrations` is apply-once, checksum-protected history
+- why pipeline full refresh is an operational transition rather than a migration
+- how the migration history supports rebuilding an environment from scratch
+- how the design would change at hundreds of thousands of trucks
