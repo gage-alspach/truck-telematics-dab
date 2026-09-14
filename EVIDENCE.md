@@ -150,8 +150,8 @@ After promoting this branch, it should also contain `20260914_00_drop_active_fla
 
 ## 6. Post-migration contraction demonstration
 
-This branch demonstrates the correct ordering for a destructive schema contraction. Start from the baseline/main
-version where `active_flag` exists and is used by the Gold pipeline.
+This branch demonstrates a destructive schema contraction while keeping the normal deployment procedure unchanged.
+Start from the baseline/main version where `active_flag` exists and is used by the Gold pipeline.
 
 Before deployment, prove the column exists:
 
@@ -163,24 +163,33 @@ FROM telematics.dev.truck_details
 ORDER BY truck_id;
 ```
 
-Then promote the branch through each target. For dev:
+Then run the complete standard release block for dev:
 
 ```bash
 databricks bundle validate -t dev
+databricks bundle sync -t dev
+databricks bundle run -t dev pre_migrations
 databricks bundle deploy -t dev
-
-# Removing active_flag from the Gold streaming-table schema is a hard deletion,
-# so reconcile the declarative pipeline with an explicit full refresh.
-databricks bundle run -t dev telematics_pipeline --full-refresh-all
-
-# Only after the new pipeline definition has run without the dependency:
 databricks bundle run -t dev post_migrations
+```
 
-# Final verification after the persistent reference-table contraction:
+For this release, the pre phase has no new migration. The deploy installs pipeline code that no longer references
+`active_flag`, and the post phase runs `20260914_00_drop_active_flag.sql` to remove the obsolete reference-table
+column. Do not insert a compatibility run or full refresh into the middle of this five-step release block.
+
+After the release block completes, run the release-specific operational refresh:
+
+```bash
+databricks bundle run -t dev telematics_pipeline --full-refresh-all
+```
+
+Then optionally run the normal orchestrator as final verification:
+
+```bash
 databricks bundle run -t dev telematics_orchestrator
 ```
 
-Repeat the same sequence for `test` and `prod`.
+Promote using the same five-step release block for `test` and `prod`, followed by the full refresh for each target.
 
 After the post migration, prove the persistent column is gone and the migration was recorded:
 
@@ -201,9 +210,10 @@ FROM telematics.prod.gold_truck_current
 ORDER BY truck_id;
 ```
 
-The walkthrough explanation is: **deploy code that no longer depends on the column, prove the new declarative pipeline
-state, then run the destructive post migration.** Dropping `active_flag` before deployment would risk breaking the old
-pipeline and would weaken rollback options.
+The walkthrough explanation is: **the automated release procedure is fixed and always runs validate -> sync -> pre ->
+deploy -> post.** This release deploys code that no longer depends on `active_flag` before its post migration drops the
+persistent column. The full refresh is a separate operational action after release, required to reconcile the
+pipeline-managed streaming-table schema.
 
 ## 7. Optional schema-drift proof
 
