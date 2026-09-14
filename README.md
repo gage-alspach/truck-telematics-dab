@@ -117,19 +117,7 @@ converge on the same current reference/schema state before the first pipeline ru
 
 ### Normal release flow
 
-For an existing target, the intended order is:
-
-```text
-validate
-  -> publish/sync the new migration files
-  -> run pre_migrations
-  -> bundle deploy
-  -> run post_migrations when the release contains post-deploy work
-  -> run or refresh the pipeline
-```
-
-The pre-migration job already exists from the prior deployment, so the new migration files must be made visible to that
-job before invoking it. With the CLI this can be done with `bundle sync` before the pre-migration run:
+For an existing target, the automated release is always this complete five-step block:
 
 ```bash
 databricks bundle validate -t dev
@@ -137,15 +125,16 @@ databricks bundle sync -t dev
 databricks bundle run -t dev pre_migrations
 databricks bundle deploy -t dev
 databricks bundle run -t dev post_migrations
-databricks bundle run -t dev telematics_orchestrator
 ```
 
-`post_migrations` is safe to run even when a release contains no post SQL files; the runner simply reports that there
-is nothing to apply. For releases that do not require post-deploy work, that step may be omitted to conserve Free
-Edition resources.
+The block is treated as one release unit rather than selectively skipping stages. If a phase has no pending SQL,
+the migration runner simply reports that there is nothing to apply and the release continues.
 
-The same release sequence is promoted through test and prod. Releases should be serialized per target and stopped on
-any failed validation, migration, deployment, or pipeline run.
+The same five-step sequence is promoted through test and prod. Releases should be serialized per target and stopped
+on any failed validation, migration, or deployment step. Schedules remain paused during release activity.
+
+Any release-specific operational action happens **after** the five-step release block. Examples include a full or
+selective Lakeflow refresh, a smoke run, or additional verification queries.
 
 ## Why pre and post migrations are separate
 
@@ -155,12 +144,12 @@ Pre-migrations are for changes that must exist before the new application versio
 - adding a nullable column
 - adding backward-compatible structure that both old and new code can tolerate
 
-Post-migrations are SQL data/schema changes that should occur only after the new application version exists. Typical
+Post-migrations are SQL data/schema changes that should occur after the new application version is deployed. Typical
 examples are:
 
 - backfilling a newly introduced column after compatible code is deployed
 - cleanup/contraction work after the new code no longer depends on the old structure
-- other controlled SQL changes that should be gated on successful deployment
+- other controlled SQL changes that belong after deployment
 
 This follows an expand/deploy/backfill-or-contract pattern instead of coupling schema mutation directly to
 `databricks bundle deploy`.
@@ -201,34 +190,43 @@ dimension with an insert-only `MERGE`.
 
 This branch demonstrates a **post-deployment contraction**, which is the strongest use case for the post-migration
 phase. The baseline application reads `truck_details.active_flag` into both Gold outputs. This branch removes that
-application dependency first and only then removes the persistent column.
+application dependency and adds a post migration that removes the persistent column.
 
-```text
-bundle deploy
-  -> deploy pipeline code that no longer references active_flag
+The automated release block remains unchanged:
 
-full refresh pipeline
-  -> reconcile the declarative Gold schema and prove the new code runs without active_flag
-
-post/20260914_00_drop_active_flag.sql
-  -> enable Delta column mapping on truck_details if the column still exists
-  -> drop active_flag from the managed reference table
-
-normal pipeline run
-  -> verify the deployed pipeline still succeeds after the contraction
+```bash
+databricks bundle validate -t dev
+databricks bundle sync -t dev
+databricks bundle run -t dev pre_migrations
+databricks bundle deploy -t dev
+databricks bundle run -t dev post_migrations
 ```
 
-The full refresh is an operational step rather than a migration. It is required here because hard deletion of a
-column from the schema of a pipeline-managed streaming table is not checkpoint-compatible. The persistent
-`truck_details` contraction remains a versioned SQL post-migration.
+For this release:
 
-For this demonstration, schedules should remain paused and the release should be serialized. That prevents the old
-pipeline version from running between deployment and the post-migration drop. In a larger production release process,
-a destructive post migration would normally be gated on a successful compatibility/smoke run of the new version.
+- `pre_migrations` has no new migration to apply.
+- `bundle deploy` installs pipeline code that no longer references `active_flag`.
+- `post_migrations` runs `20260914_00_drop_active_flag.sql` and removes the obsolete column from `truck_details`.
+
+After the full release block completes, run the required operational refresh:
+
+```bash
+databricks bundle run -t dev telematics_pipeline --full-refresh-all
+```
+
+The full refresh reconciles the declarative Gold schema after `active_flag` was removed from the streaming-table
+output definition. A normal `telematics_orchestrator` run can then be used as final verification.
+
+This demonstrates why the destructive drop belongs in **post**, not pre: if deployment fails, the post migration is
+never reached and the old deployed pipeline still has the column it expects. Once the post migration runs, the newly
+deployed pipeline definition is already compatible with the contracted reference table.
+
+The post migration is idempotent. It checks `information_schema.columns`, enables Delta column mapping when needed,
+and drops `active_flag` only if the column still exists.
 
 A fresh environment still replays the complete SQL migration chain: baseline pre-migrations create and seed
 `truck_details` with `active_flag`, the current pipeline definition is deployed without that dependency, and the post
-migration removes the obsolete column. No manual schema edit is required.
+migration removes the obsolete persistent column. No manual SQL edit is required.
 
 ## What the orchestrator does
 
@@ -335,9 +333,10 @@ Be ready to explain:
 - how the stream-static join behaves
 - why the current-state MV re-reads the current reference snapshot
 - why migrations are separate from normal ingestion runs
+- why the five-step release block is consistent across releases
 - the difference between pre- and post-deployment SQL migrations
 - why dropping `active_flag` is deliberately a post-deployment contraction
 - why `_migrations` is apply-once, checksum-protected history
-- why pipeline full refresh is an operational transition rather than a migration
+- why pipeline full refresh is an operational transition after deployment rather than a migration
 - how the migration history supports rebuilding an environment from scratch
 - how the design would change at hundreds of thousands of trucks
