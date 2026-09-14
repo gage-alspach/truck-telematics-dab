@@ -29,6 +29,7 @@ databricks bundle deploy -t prod
 databricks bundle run -t prod post_migrations
 databricks bundle run -t prod telematics_orchestrator
 ```
+<img width="836" height="830" alt="successful deploy and run - prod" src="https://github.com/user-attachments/assets/b26b9a95-9f22-4e26-a974-8fadc02ff301" />
 
 ## 2. Workspace assets
 
@@ -40,12 +41,20 @@ Show the target-specific pipeline/job and the pipeline graph containing:
 - `gold_truck_current`
 
 DEV: 
+
 <img width="1378" height="469" alt="successful dev ping and pipeline refresh - dev" src="https://github.com/user-attachments/assets/3cc7c6bc-c66d-4867-a9c0-928d27b65544" />
 <img width="2237" height="575" alt="successful pipeline run - dev" src="https://github.com/user-attachments/assets/3f2666c8-2d98-49bd-a0ee-00925ad05b01" />
 
 TEST:
+
 <img width="1065" height="470" alt="successful test ping and pipeline refresh - test" src="https://github.com/user-attachments/assets/83f2aa6a-66aa-450e-8d3b-3cc3234832b3" />
 <img width="1818" height="519" alt="successful pipeline run - test" src="https://github.com/user-attachments/assets/7e5d1b68-5fd4-4f3c-8fde-4bc8f0e49a20" />
+
+PROD:
+
+<img width="1815" height="472" alt="successful prod ping and pipeline refresh - prod" src="https://github.com/user-attachments/assets/7eb2916b-c7fe-4ab7-a12d-fbd235c6905e" />
+<img width="1828" height="503" alt="successful pipeline run - prod" src="https://github.com/user-attachments/assets/d067e76a-3b36-4753-aa14-22d4b830ec1c" />
+
 
 ## 3. Gold data
 
@@ -58,10 +67,16 @@ ORDER BY truck_id;
 ```
 
 DEV:
+
 <img width="1394" height="683" alt="gold current truck - dev" src="https://github.com/user-attachments/assets/19d37446-b030-406c-9cfa-6fba0e3fd609" />
 
 TEST:
+
 <img width="1412" height="736" alt="gold current truck - test" src="https://github.com/user-attachments/assets/affd66aa-ede4-453a-9e49-f03a09b82682" />
+
+PROD:
+
+<img width="1409" height="741" alt="gold current truck - prod" src="https://github.com/user-attachments/assets/8e7d9555-826e-41e1-838f-9f28dc90dcd7" />
 
 
 Show coordinates plus driver/depot/region.
@@ -140,12 +155,20 @@ copy of the event. For an invalid row, expect `silver_key_count` to be zero and
 `in_silver` to be false, showing that the expectation removed it.
 
 DEV:
+
 <img width="367" height="364" alt="silver dropping invalid rows - dev" src="https://github.com/user-attachments/assets/41668dbf-097f-4f73-90b8-91f25e3a0fbd" />
 <img width="1346" height="409" alt="silver removals - dev" src="https://github.com/user-attachments/assets/bf96f975-6db5-440d-a0c6-2152064596bc" />
 
 TEST:
+
 <img width="388" height="373" alt="silver dropping invalid rows - test" src="https://github.com/user-attachments/assets/ad5fce07-d25d-4ab5-bbd9-21397979e11a" />
 <img width="1345" height="636" alt="silver removals - test" src="https://github.com/user-attachments/assets/0c5a27e5-ce4e-4ad1-8b69-ecd22c5944b8" />
+
+PROD:
+
+<img width="377" height="361" alt="silver dropping invalid rows - prod" src="https://github.com/user-attachments/assets/998ddcde-6577-48cf-b06d-f2d913e90c09" />
+<img width="1347" height="786" alt="silver removals - prod" src="https://github.com/user-attachments/assets/ce7b58f9-72fe-477b-85fa-204e8a6924ba" />
+
 
 ## 5. Migration history proof
 
@@ -158,14 +181,22 @@ ORDER BY applied_at;
 ```
 
 DEV:
+
 <img width="735" height="583" alt="successful pre-migration run - dev" src="https://github.com/user-attachments/assets/19e0e785-4f00-4ac3-93a3-5bf5a1e2cc7d" />
 <img width="740" height="576" alt="successful post-migration run - dev" src="https://github.com/user-attachments/assets/0a7d14c4-c9e7-430d-ae1a-e4bf3aeac74c" />
 <img width="1241" height="316" alt="migrations - dev" src="https://github.com/user-attachments/assets/ee6f4418-4667-45a4-b5c2-1a2fc7c91ac4" />
 
 TEST:
+
 <img width="1061" height="512" alt="successful pre-migration run - test" src="https://github.com/user-attachments/assets/01db4c91-3e02-4f21-90c4-547ee85a7624" />
 <img width="1066" height="505" alt="successful post-migration run - test" src="https://github.com/user-attachments/assets/80fae9d5-501e-4d6f-a559-27a100cfad74" />
 <img width="1244" height="316" alt="migrations - test" src="https://github.com/user-attachments/assets/98f505d5-668b-48dc-9e92-0a62ba982d45" />
+
+PROD:
+
+<img width="899" height="579" alt="successful pre-migration run - prod" src="https://github.com/user-attachments/assets/a3cdfc6d-8a76-4550-8b5d-4ddf6b1f101f" />
+<img width="904" height="578" alt="successful post-migration run - prod" src="https://github.com/user-attachments/assets/3354c0ff-2513-4747-b706-3dc0f8766d08" />
+<img width="1244" height="319" alt="migrations - prod" src="https://github.com/user-attachments/assets/e2bb0aaa-a182-4bf3-89e0-c19d8e4aa481" />
 
 
 ## 6. Post-migration contraction demonstration
