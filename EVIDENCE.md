@@ -4,26 +4,31 @@ Capture these commands succeeding:
 
 ```bash
 databricks bundle validate -t dev
+databricks bundle run -t dev pre_migrations
 databricks bundle deploy -t dev
-#Skipping pre_migrations and orchestrator in the dev env to save resources 
+databricks bundle run -t dev post_migrations
+databricks bundle run -t dev telematics_orchestrator
 ```
-<img width="734" height="247" alt="deploy working - dev env" src="https://github.com/user-attachments/assets/ff3e03fd-1af7-4496-b015-c630343a2dd9" />
+<img width="828" height="734" alt="successful deploy and run - dev" src="https://github.com/user-attachments/assets/634bf6b6-6ef1-4082-ad38-f88f0887a865" />
+
 
 ```bash
 databricks bundle validate -t test
-databricks bundle deploy -t test
 databricks bundle run -t test pre_migrations
+databricks bundle deploy -t test
+databricks bundle run -t test post_migrations
 databricks bundle run -t test telematics_orchestrator
 ```
-<img width="840" height="567" alt="deploy working - test env" src="https://github.com/user-attachments/assets/eb93a757-984f-4553-a817-983adfcf4a01" />
+
+
 
 ```bash
 databricks bundle validate -t prod
-databricks bundle deploy -t prod
 databricks bundle run -t prod pre_migrations
+databricks bundle deploy -t prod
+databricks bundle run -t prod post_migrations
 databricks bundle run -t prod telematics_orchestrator
 ```
-<img width="819" height="424" alt="deploy working - prod" src="https://github.com/user-attachments/assets/5c92d5ed-a85a-4b91-8cf1-f081705c800a" />
 
 ## 2. Workspace assets
 
@@ -33,7 +38,12 @@ Show the target-specific pipeline/job and the pipeline graph containing:
 - `silver_pings`
 - `gold_pings_enriched`
 - `gold_truck_current`
-<img width="1040" height="383" alt="successful pipeline - prod" src="https://github.com/user-attachments/assets/767b7db5-0fd7-4ac6-b257-755adf6839ba" />
+
+DEV: 
+<img width="1378" height="469" alt="successful dev ping and pipeline refresh - dev" src="https://github.com/user-attachments/assets/3cc7c6bc-c66d-4867-a9c0-928d27b65544" />
+<img width="2237" height="575" alt="successful pipeline run - dev" src="https://github.com/user-attachments/assets/3f2666c8-2d98-49bd-a0ee-00925ad05b01" />
+
+
 
 ## 3. Gold data
 
@@ -44,7 +54,10 @@ SELECT *
 FROM telematics.prod.gold_truck_current
 ORDER BY truck_id;
 ```
-<img width="1269" height="677" alt="gold truck current working - prod" src="https://github.com/user-attachments/assets/6e77d4b3-c003-4875-a476-6d3612bd744d" />
+
+DEV:
+<img width="1394" height="683" alt="gold current truck - dev" src="https://github.com/user-attachments/assets/19d37446-b030-406c-9cfa-6fba0e3fd609" />
+
 
 Show coordinates plus driver/depot/region.
 
@@ -120,10 +133,13 @@ For a valid duplicate key, expect `bronze_key_count` to be greater than one,
 `silver_key_count` to be one, and `in_silver` to be true. This means Silver retained one
 copy of the event. For an invalid row, expect `silver_key_count` to be zero and
 `in_silver` to be false, showing that the expectation removed it.
-In the successful pipeline run you can see the bronze has 20 more rows than silver, due to 10 rows being dropped from invalid coordinates as well as 10 duplicates being dropped and only one being passed to silver. 
-<img width="1337" height="784" alt="dropped rows from silver - prod" src="https://github.com/user-attachments/assets/b6ec4e2a-cb4b-4856-951d-1c10dab276b5" />
 
-## 5. Migration proof
+DEV:
+<img width="367" height="364" alt="silver dropping invalid rows - dev" src="https://github.com/user-attachments/assets/41668dbf-097f-4f73-90b8-91f25e3a0fbd" />
+<img width="1346" height="409" alt="silver removals - dev" src="https://github.com/user-attachments/assets/bf96f975-6db5-440d-a0c6-2152064596bc" />
+
+
+## 5. Migration history proof
 
 After the next clean deployment, show:
 
@@ -133,20 +149,78 @@ FROM telematics.prod._migrations
 ORDER BY applied_at;
 ```
 
-The existing screenshots below were captured before the history table was renamed from `_schema_migrations` to `_migrations`; replace them with fresh screenshots after the planned destroy/redeploy.
+DEV:
+<img width="735" height="583" alt="successful pre-migration run - dev" src="https://github.com/user-attachments/assets/19e0e785-4f00-4ac3-93a3-5bf5a1e2cc7d" />
+<img width="740" height="576" alt="successful post-migration run - dev" src="https://github.com/user-attachments/assets/0a7d14c4-c9e7-430d-ae1a-e4bf3aeac74c" />
+<img width="1241" height="316" alt="migrations - dev" src="https://github.com/user-attachments/assets/ee6f4418-4667-45a4-b5c2-1a2fc7c91ac4" />
 
-<img width="1254" height="320" alt="migration history - prod" src="https://github.com/user-attachments/assets/8fc6e537-87b5-4761-b6e9-984430bb42b8" />
 
-<img width="1595" height="595" alt="migrations working - prod env" src="https://github.com/user-attachments/assets/24325d56-297d-4809-9a65-54bf63ba9c72" />
+## 6. Post-migration contraction demonstration
 
-The history should include the table-creation, `active_flag`, and initial fleet seed migrations. On the migration-demonstration branch it should additionally show the `truck_class` pre- and post-migrations after promotion.
+This branch demonstrates the correct ordering for a destructive schema contraction. Start from the baseline/main
+version where `active_flag` exists and is used by the Gold pipeline.
 
-## 6. Optional schema-drift proof
+Before deployment, prove the column exists:
+
+```sql
+DESCRIBE TABLE telematics.dev.truck_details;
+
+SELECT truck_id, active_flag
+FROM telematics.dev.truck_details
+ORDER BY truck_id;
+```
+
+Then promote the branch through each target. For dev:
+
+```bash
+databricks bundle validate -t dev
+databricks bundle deploy -t dev
+
+# Removing active_flag from the Gold streaming-table schema is a hard deletion,
+# so reconcile the declarative pipeline with an explicit full refresh.
+databricks bundle run -t dev telematics_pipeline --full-refresh-all
+
+# Only after the new pipeline definition has run without the dependency:
+databricks bundle run -t dev post_migrations
+
+# Final verification after the persistent reference-table contraction:
+databricks bundle run -t dev telematics_orchestrator
+```
+
+Repeat the same sequence for `test` and `prod`.
+
+After the post migration, prove the persistent column is gone and the migration was recorded:
+
+```sql
+DESCRIBE TABLE telematics.prod.truck_details;
+
+SELECT *
+FROM telematics.prod._migrations
+WHERE migration_id = '20260914_00_drop_active_flag'
+ORDER BY applied_at;
+```
+
+Finally show that Gold still populates successfully and no longer exposes `active_flag`:
+
+```sql
+SELECT *
+FROM telematics.prod.gold_truck_current
+ORDER BY truck_id;
+```
+
+The walkthrough explanation is: **deploy code that no longer depends on the column, prove the new declarative pipeline
+state, then run the destructive post migration.** Dropping `active_flag` before deployment would risk breaking the old
+pipeline and would weaken rollback options.
+
+## 7. Optional schema-drift proof
 
 Run prod with:
 
 ```bash
 databricks bundle run -t prod --params drift_mode=rename_latitude,batches=3 telematics_orchestrator
 ```
+
 **Ran out of resources attempting this.**
-Inspect recent Bronze rows and the pipeline expectation metrics for the `latitude` issue. Explain that Bronze tolerates the drift, while curated contract changes require a reviewed code/migration change.
+
+Inspect recent Bronze rows and the pipeline expectation metrics for the `latitude` issue. Explain that Bronze tolerates
+the drift, while curated contract changes require a reviewed code/migration change.
