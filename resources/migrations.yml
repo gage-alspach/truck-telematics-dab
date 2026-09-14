@@ -23,9 +23,10 @@ resources:
               - ${var.schema}
               - --target
               - ${bundle.target}
+              - --phase
+              - pre
               - --migration-root
               - ${workspace.file_path}/src/migrations
               - --commit-sha
               - '{{job.parameters.commit_sha}}'
           environment_key: default
-
