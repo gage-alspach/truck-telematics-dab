@@ -19,7 +19,7 @@ databricks bundle deploy -t test
 databricks bundle run -t test post_migrations
 databricks bundle run -t test telematics_orchestrator
 ```
-
+<img width="823" height="786" alt="successful deploy and run - test" src="https://github.com/user-attachments/assets/b74f83be-1b3c-402f-a3ef-929a74de5453" />
 
 
 ```bash
@@ -43,7 +43,9 @@ DEV:
 <img width="1378" height="469" alt="successful dev ping and pipeline refresh - dev" src="https://github.com/user-attachments/assets/3cc7c6bc-c66d-4867-a9c0-928d27b65544" />
 <img width="2237" height="575" alt="successful pipeline run - dev" src="https://github.com/user-attachments/assets/3f2666c8-2d98-49bd-a0ee-00925ad05b01" />
 
-
+TEST:
+<img width="1065" height="470" alt="successful test ping and pipeline refresh - test" src="https://github.com/user-attachments/assets/83f2aa6a-66aa-450e-8d3b-3cc3234832b3" />
+<img width="1818" height="519" alt="successful pipeline run - test" src="https://github.com/user-attachments/assets/7e5d1b68-5fd4-4f3c-8fde-4bc8f0e49a20" />
 
 ## 3. Gold data
 
@@ -57,6 +59,9 @@ ORDER BY truck_id;
 
 DEV:
 <img width="1394" height="683" alt="gold current truck - dev" src="https://github.com/user-attachments/assets/19d37446-b030-406c-9cfa-6fba0e3fd609" />
+
+TEST:
+<img width="1412" height="736" alt="gold current truck - test" src="https://github.com/user-attachments/assets/affd66aa-ede4-453a-9e49-f03a09b82682" />
 
 
 Show coordinates plus driver/depot/region.
@@ -138,6 +143,9 @@ DEV:
 <img width="367" height="364" alt="silver dropping invalid rows - dev" src="https://github.com/user-attachments/assets/41668dbf-097f-4f73-90b8-91f25e3a0fbd" />
 <img width="1346" height="409" alt="silver removals - dev" src="https://github.com/user-attachments/assets/bf96f975-6db5-440d-a0c6-2152064596bc" />
 
+TEST:
+<img width="388" height="373" alt="silver dropping invalid rows - test" src="https://github.com/user-attachments/assets/ad5fce07-d25d-4ab5-bbd9-21397979e11a" />
+<img width="1345" height="636" alt="silver removals - test" src="https://github.com/user-attachments/assets/0c5a27e5-ce4e-4ad1-8b69-ecd22c5944b8" />
 
 ## 5. Migration history proof
 
@@ -153,6 +161,11 @@ DEV:
 <img width="735" height="583" alt="successful pre-migration run - dev" src="https://github.com/user-attachments/assets/19e0e785-4f00-4ac3-93a3-5bf5a1e2cc7d" />
 <img width="740" height="576" alt="successful post-migration run - dev" src="https://github.com/user-attachments/assets/0a7d14c4-c9e7-430d-ae1a-e4bf3aeac74c" />
 <img width="1241" height="316" alt="migrations - dev" src="https://github.com/user-attachments/assets/ee6f4418-4667-45a4-b5c2-1a2fc7c91ac4" />
+
+TEST:
+<img width="1061" height="512" alt="successful pre-migration run - test" src="https://github.com/user-attachments/assets/01db4c91-3e02-4f21-90c4-547ee85a7624" />
+<img width="1066" height="505" alt="successful post-migration run - test" src="https://github.com/user-attachments/assets/80fae9d5-501e-4d6f-a559-27a100cfad74" />
+<img width="1244" height="316" alt="migrations - test" src="https://github.com/user-attachments/assets/98f505d5-668b-48dc-9e92-0a62ba982d45" />
 
 
 ## 6. Post-migration contraction demonstration
