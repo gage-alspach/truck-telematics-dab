@@ -256,6 +256,15 @@ The walkthrough explanation is: **deploy code that no longer depends on the colu
 state, then run the destructive post migration.** Dropping `active_flag` before deployment would risk breaking the old
 pipeline and would weaken rollback options.
 
+DEV:
+
+<img width="1691" height="497" alt="image" src="https://github.com/user-attachments/assets/344a58e2-3815-4f9a-b641-13cbb87cd45b" />
+<img width="1330" height="309" alt="migration list - dev" src="https://github.com/user-attachments/assets/56e61d55-29ea-4a34-b2b2-bc9e18d782bf" />
+
+<img width="2043" height="347" alt="isactive dropped streaming table - dev" src="https://github.com/user-attachments/assets/3ad7abbd-189c-45d1-a43a-e477f808dabf" />
+<img width="1417" height="719" alt="isactive dropped materialized view - dev" src="https://github.com/user-attachments/assets/a3eeedf0-44b3-4fef-a953-a393965c5b2e" />
+<img width="970" height="602" alt="isactive dropped static table - dev" src="https://github.com/user-attachments/assets/eba56bf9-be48-4ef8-b8ec-66a82ed76760" />
+
 ## 7. Optional schema-drift proof
 
 Run prod with:
@@ -264,7 +273,15 @@ Run prod with:
 databricks bundle run -t prod --params drift_mode=rename_latitude,batches=3 telematics_orchestrator
 ```
 
-**Ran out of resources attempting this.**
-
 Inspect recent Bronze rows and the pipeline expectation metrics for the `latitude` issue. Explain that Bronze tolerates
 the drift, while curated contract changes require a reviewed code/migration change.
+
+DEV:
+
+<img width="1671" height="681" alt="schema change successful run - dev" src="https://github.com/user-attachments/assets/d703dfc2-7297-48b0-ae43-9fbb7ce0aaea" />
+
+<img width="1478" height="588" alt="schema change rows bronze - dev" src="https://github.com/user-attachments/assets/dee52ebc-9ff3-4814-80f4-cd18255a9355" />
+<img width="984" height="1194" alt="schema change cancelled run - dev" src="https://github.com/user-attachments/assets/54254ab9-1f2e-41b4-9c34-423442fa1510" />
+<img width="977" height="1118" alt="schema change triggered run - dev" src="https://github.com/user-attachments/assets/00ca0c6e-2d3a-43a5-8f32-c7eb75645f2c" />
+<img width="382" height="365" alt="schema change failed to promote rows due to invalid coordinates - dev" src="https://github.com/user-attachments/assets/1bdf603d-d46f-4709-9c17-b2e9999ab74d" />
+
