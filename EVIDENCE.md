@@ -204,66 +204,31 @@ PROD:
 This branch demonstrates the correct ordering for a destructive schema contraction. Start from the baseline/main
 version where `active_flag` exists and is used by the Gold pipeline.
 
-Before deployment, prove the column exists:
-
-```sql
-DESCRIBE TABLE telematics.dev.truck_details;
-
-SELECT truck_id, active_flag
-FROM telematics.dev.truck_details
-ORDER BY truck_id;
-```
-
 Then promote the branch through each target. For dev:
 
 ```bash
 databricks bundle validate -t dev
+databricks bundle sync -t dev
+databricks bundle run -t dev pre_migrations
 databricks bundle deploy -t dev
-
-# Removing active_flag from the Gold streaming-table schema is a hard deletion,
-# so reconcile the declarative pipeline with an explicit full refresh.
-databricks bundle run -t dev telematics_pipeline --full-refresh-all
-
-# Only after the new pipeline definition has run without the dependency:
 databricks bundle run -t dev post_migrations
-
-# Final verification after the persistent reference-table contraction:
-databricks bundle run -t dev telematics_orchestrator
 ```
-
-Repeat the same sequence for `test` and `prod`.
-
-After the post migration, prove the persistent column is gone and the migration was recorded:
-
-```sql
-DESCRIBE TABLE telematics.prod.truck_details;
-
-SELECT *
-FROM telematics.prod._migrations
-WHERE migration_id = '20260914_00_drop_active_flag'
-ORDER BY applied_at;
+Then a full refresh is required in to update the gold streaming tables:
+```bash
+databricks bundle run -t dev telematics_pipeline --full-refresh-all
 ```
+After the post migration, prove the persistent column is gone and the migration was recorded.
+<img width="1691" height="497" alt="image" src="https://github.com/user-attachments/assets/344a58e2-3815-4f9a-b641-13cbb87cd45b" />
+<img width="1330" height="309" alt="migration list - dev" src="https://github.com/user-attachments/assets/56e61d55-29ea-4a34-b2b2-bc9e18d782bf" />
+<img width="970" height="602" alt="isactive dropped static table - dev" src="https://github.com/user-attachments/assets/eba56bf9-be48-4ef8-b8ec-66a82ed76760" />
 
-Finally show that Gold still populates successfully and no longer exposes `active_flag`:
-
-```sql
-SELECT *
-FROM telematics.prod.gold_truck_current
-ORDER BY truck_id;
-```
+Finally show that Gold still populates successfully and no longer exposes `active_flag`.
+<img width="2043" height="347" alt="isactive dropped streaming table - dev" src="https://github.com/user-attachments/assets/3ad7abbd-189c-45d1-a43a-e477f808dabf" />
+<img width="1417" height="719" alt="isactive dropped materialized view - dev" src="https://github.com/user-attachments/assets/a3eeedf0-44b3-4fef-a953-a393965c5b2e" />
 
 The walkthrough explanation is: **deploy code that no longer depends on the column, prove the new declarative pipeline
 state, then run the destructive post migration.** Dropping `active_flag` before deployment would risk breaking the old
 pipeline and would weaken rollback options.
-
-DEV:
-
-<img width="1691" height="497" alt="image" src="https://github.com/user-attachments/assets/344a58e2-3815-4f9a-b641-13cbb87cd45b" />
-<img width="1330" height="309" alt="migration list - dev" src="https://github.com/user-attachments/assets/56e61d55-29ea-4a34-b2b2-bc9e18d782bf" />
-
-<img width="2043" height="347" alt="isactive dropped streaming table - dev" src="https://github.com/user-attachments/assets/3ad7abbd-189c-45d1-a43a-e477f808dabf" />
-<img width="1417" height="719" alt="isactive dropped materialized view - dev" src="https://github.com/user-attachments/assets/a3eeedf0-44b3-4fef-a953-a393965c5b2e" />
-<img width="970" height="602" alt="isactive dropped static table - dev" src="https://github.com/user-attachments/assets/eba56bf9-be48-4ef8-b8ec-66a82ed76760" />
 
 ## 7. Optional schema-drift proof
 
