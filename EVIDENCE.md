@@ -202,9 +202,9 @@ PROD:
 ## 6. Post-migration contraction demonstration
 
 This branch demonstrates the correct ordering for a destructive schema contraction. Start from the baseline/main
-version where `active_flag` exists and is used by the Gold pipeline.
+version where `active_flag` exists and is used by the Gold pipeline. Ensure you are using the migration-demonstration branch.
 
-Then promote the branch through each target. For dev:
+Then promote the demonstration branch through each target. For dev:
 
 ```bash
 databricks bundle validate -t dev
@@ -229,6 +229,34 @@ Finally show that Gold still populates successfully and no longer exposes `activ
 The walkthrough explanation is: **deploy code that no longer depends on the column, prove the new declarative pipeline
 state, then run the destructive post migration.** Dropping `active_flag` before deployment would risk breaking the old
 pipeline and would weaken rollback options.
+
+TEST code:
+
+```bash
+databricks bundle validate -t test
+databricks bundle sync -t test
+databricks bundle run -t test pre_migrations
+databricks bundle deploy -t test
+databricks bundle run -t test post_migrations
+```
+Then a full refresh is required in to update the gold streaming tables:
+```bash
+databricks bundle run -t test telematics_pipeline --full-refresh-all
+```
+
+PROD code:
+
+```bash
+databricks bundle validate -t prod
+databricks bundle sync -t prod
+databricks bundle run -t prod pre_migrations
+databricks bundle deploy -t prod
+databricks bundle run -t prod post_migrations
+```
+Then a full refresh is required in to update the gold streaming tables:
+```bash
+databricks bundle run -t prod telematics_pipeline --full-refresh-all
+```
 
 ## 7. Optional schema-drift proof
 
